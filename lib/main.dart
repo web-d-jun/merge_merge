@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'dart:math';
 void main() {
   runApp(const MyApp());
@@ -48,6 +49,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   int score = 0;
   bool isDropInProgress = false;
   bool hasPlacedFirstTile = false;
+  bool isGameOver = false;
   final GlobalKey<_GameBoardWidgetState> _gameBoardKey = GlobalKey<_GameBoardWidgetState>();
 
   @override
@@ -67,15 +69,75 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 
   void _onColumnTapped(int col) {
-    if (isDropInProgress) return;
+    if (isDropInProgress || isGameOver) return;
     final targetRow = gameBoard.findDropRow(col);
-    if (targetRow < 0) return;
+    if (targetRow < 0) {
+      if (gameBoard.isBoardFull()) {
+        _handleGameOver();
+      }
+      return;
+    }
     setState(() {
       isDropInProgress = true;
       hasPlacedFirstTile = true;
     });
     final fallingTile = FallingTile(nextTile, 0, col, targetRow, this);
     _gameBoardKey.currentState!.addFallingTile(fallingTile);
+  }
+
+  void _resetGame() {
+    setState(() {
+      gameBoard = GameBoard(8, 6, this);
+      nextTile = _generateRandomTile();
+      score = 0;
+      isDropInProgress = false;
+      hasPlacedFirstTile = false;
+      isGameOver = false;
+    });
+  }
+
+  Future<void> _shareScore() async {
+    final message = 'Fruity Merge 점수: $score점!\n너도 도전해봐!';
+    await SharePlus.instance.share(
+      ShareParams(
+        text: message,
+        subject: 'Fruity Merge 점수 공유',
+      ),
+    );
+  }
+
+  Future<void> _handleGameOver() async {
+    if (!mounted || isGameOver) return;
+    setState(() {
+      isGameOver = true;
+      isDropInProgress = false;
+    });
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Game Over'),
+          content: Text('더 이상 놓을 칸이 없어요.\n최종 점수: $score점'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await _shareScore();
+              },
+              child: const Text('점수 공유'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _resetGame();
+              },
+              child: const Text('다시하기'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -228,13 +290,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                     key: _gameBoardKey,
                     gameBoard: gameBoard,
                     onColumnTapped: _onColumnTapped,
-                    isInputEnabled: !isDropInProgress,
+                    isInputEnabled: !isDropInProgress && !isGameOver,
                     onTileDropped: (ft) {
                       setState(() {
                         score += gameBoard.handleDroppedTile(ft.tile, ft.col);
                         nextTile = _generateRandomTile();
                         isDropInProgress = false;
                       });
+                      if (gameBoard.isBoardFull()) {
+                        _handleGameOver();
+                      }
                     },
                   ),
                 ),
@@ -535,10 +600,18 @@ class FallingTile {
   final int targetRow;
   late AnimationController controller;
   late Animation<double> animation;
+  static const int _millisecondsPerCell = 93;
 
   FallingTile(this.tile, this.startRow, this.col, this.targetRow, TickerProvider vsync) {
-    controller = AnimationController(vsync: vsync, duration: const Duration(milliseconds: 700));
-    animation = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(parent: controller, curve: Curves.easeIn));
+    final travelCells = (targetRow - startRow + 1).clamp(1, 999);
+    final durationMs = (travelCells * _millisecondsPerCell).clamp(70, 420);
+    controller = AnimationController(
+      vsync: vsync,
+      duration: Duration(milliseconds: durationMs),
+    );
+    animation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: controller, curve: Curves.linear),
+    );
   }
 
   Future<void> start() async {
@@ -946,6 +1019,15 @@ class GameBoard {
       if (board[row][col] == null) return row;
     }
     return -1;
+  }
+
+  bool isBoardFull() {
+    for (int col = 0; col < cols; col++) {
+      if (findDropRow(col) >= 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   int handleDroppedTile(Tile tile, int col) {
